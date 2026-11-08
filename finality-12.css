@@ -4914,7 +4914,6 @@ position: fixed;
    featured-content-bar-12.js, qui recrée l'iframe sous Jellyfin 12). */
 .featurediframe {
   width: 100vw;
-  height: 100vh;
   display: block;
   border: 0;
   margin: 0 auto;
@@ -4937,11 +4936,4 @@ position: fixed;
 }
 @media (max-height: 421px) and (orientation: landscape) {
   .featurediframe { height: 100vh; margin-bottom: -6em; margin-top: -6.5em; }
-}
-
-/* Layout Modern : un espaceur de 48px (hauteur de l'AppBar) est inséré en haut de la
-   page. Le .skinHeader de Legacy était en position fixed, sans espaceur : on compense
-   pour que la barre remonte au même endroit. */
-body:has(.MuiAppBar-root) .featurediframe {
-  margin-top: calc(-3.5em - 48px);
 }
