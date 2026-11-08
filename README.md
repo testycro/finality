@@ -10,6 +10,41 @@ Care has been taken to make it work in windowed mode, but it's mainly for fullsc
 
 ![movie](https://github.com/user-attachments/assets/56046d69-9626-467a-be9e-533b2e9599bc)
 
+# Jellyfin 12.x
+
+```css
+@import url("https://cdn.jsdelivr.net/gh/testycro/finality@main/finality-12.css");
+
+```
+
+or the colour version
+
+```css
+@import url("https://cdn.jsdelivr.net/gh/testycro/finality@main/Finality-Coloured-12.css");
+
+```
+
+or the scrolling backdrop colour version
+
+```css
+@import url("https://cdn.jsdelivr.net/gh/testycro/finality@main/scrolling-backdrop-12.css");
+
+```
+
+Jellyfin 12 makes the new **Modern** layout the default (Settings > Display > Display mode = Auto). The previous layout is still available as *Desktop (Legacy)*.
+After upgrading, hard refresh (`Ctrl+Shift+R`) or clear the site cache. Jellyfin 12 does not apply the Custom CSS setting to the admin dashboard.
+
+### Featured Content Bar on Jellyfin 12
+
+The bar used to be installed by replacing `home-html.<hash>.chunk.js`. The Modern layout no longer uses that file, so the bar disappears.
+Instead, keep `ui/spotlight.html` and `ui/List.txt` as they are, put `featured-content-bar-12.js` in the same `ui` folder and load it from `index.html` (the `jellyfin-web` folder, `/jellyfin/jellyfin-web` in the official Docker image):
+
+```sh
+sed -i 's#</body>#<script defer src="ui/featured-content-bar-12.js"></script></body>#' index.html
+```
+
+`index.html` is replaced by every Jellyfin update, so run it again after updating (same as before with the chunk file). It also works with the Legacy layout.
+
 # If you've updated to Jellyfin 10.11.x you need the latest version of Finality
 
 ```css
