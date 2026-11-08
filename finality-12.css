@@ -4924,7 +4924,7 @@ position: fixed;
 }
 
 @media (min-width: 951px) and (min-height: 700px) {
-  .featurediframe { min-height: 70em; }
+  .featurediframe { min-height: 50em; }
 }
 @media (max-width: 1000px) and (orientation: portrait) {
   .featurediframe { height: 25em; margin-bottom: -1em; }
