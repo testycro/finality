@@ -17,6 +17,15 @@
 
   var scheduled = false;
 
+  // Télécharge spotlight.html dès le chargement de Jellyfin, sans attendre que l'accueil
+  // React soit affiché : l'iframe le trouve ensuite déjà en cache.
+  (function prefetch() {
+    var link = document.createElement('link');
+    link.rel = 'prefetch';
+    link.href = SPOTLIGHT_SRC;
+    document.head.appendChild(link);
+  })();
+
   function ensureFrame() {
     scheduled = false;
 
