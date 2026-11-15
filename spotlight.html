@@ -1,12 +1,16 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" media="print" onload="this.media='all'">
     <title>Jellyfin Spotlight v2.6.3</title>
-	<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+	<!-- Accélération : feuilles de style chargées sans bloquer l'affichage ; Material Symbols limité à la seule icône utilisée (stat_0) -->
+	<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" media="print" onload="this.media='all'">
+	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=stat_0" media="print" onload="this.media='all'" />
+	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Titillium+Web:ital,wght@0,200;0,300;0,400;0,600;0,700;0,900;1,200;1,300;1,400;1,600;1,700&display=swap" media="print" onload="this.media='all'">
     <style>
-		@import url('https://fonts.googleapis.com/css2?family=Titillium+Web:ital,wght@0,200;0,300;0,400;0,600;0,700;0,900;1,200;1,300;1,400;1,600;1,700&display=swap');
 		body { margin: 0; padding: 0; overflow: hidden; }
 		.slide { position: relative; width: 100vw; height: 22em; cursor: pointer; border-radius: 2em; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; -ms-user-select: none; touch-action: manipulation;}
 		.slide:focus { outline: 2px solid #fff; }
@@ -100,6 +104,71 @@
 		let forwardMovies = [];
 		let useSponsorBlock = true; // Set to true to use SponsorBlock data to skip intro/outro segments of trailers
 		let monitorOutroInterval = null; // Global interval variable to monitor the outro segment of the trailer
+
+		// ===== Accélération du chargement (le rendu reste identique) =====
+		const ITEM_FIELDS = 'Overview,RemoteTrailers,PremiereDate,RunTimeTicks,ChildCount,Genres';
+		const RANDOM_BATCH_SIZE = 20;   // éléments aléatoires récupérés en une seule requête
+		const MAX_IMAGE_WAIT = 2500;    // attente max (ms) des images avant d'afficher une diapo
+		let sourcePromise = null;       // List.txt n'est lu qu'une seule fois
+		let randomQueue = [], randomBatchPromise = null;
+		const preloaded = new Map();
+
+		const getHeaders = () => {
+			let token = '';
+			try { token = JSON.parse(localStorage.getItem('jellyfin_credentials')).Servers[0].AccessToken; } catch (_) {}
+			return { 'Authorization': `MediaBrowser Client="Jellyfin Web", Token="${token}"` };
+		};
+		const apiGet = (path) => fetch(path, { headers: getHeaders() }).then(r => {
+			if (!r.ok) throw new Error(`HTTP ${r.status} ${path}`);
+			return r.json();
+		});
+
+		// Remplace les 2 requêtes HEAD par diapo : Jellyfin renvoie déjà les tags des images
+		const hasArt = item => !!(item && item.Id && item.ImageTags && item.ImageTags.Logo &&
+			Array.isArray(item.BackdropImageTags) && item.BackdropImageTags.length > 0);
+
+		// Images à la taille de l'écran (au lieu de l'original, souvent 4K) + tag => cache navigateur longue durée
+		const screenPx = Math.ceil(((window.screen && window.screen.width) || window.innerWidth) * (window.devicePixelRatio || 1));
+		const BACKDROP_WIDTH = Math.min(3840, Math.max(1280, screenPx));
+		const LOGO_WIDTH = Math.min(1600, Math.max(600, Math.ceil(screenPx / 2)));
+		const imageUrls = item => ({
+			backdrop: `/Items/${item.Id}/Images/Backdrop/0?tag=${item.BackdropImageTags[0]}&maxWidth=${BACKDROP_WIDTH}&quality=90`,
+			logo: `/Items/${item.Id}/Images/Logo?tag=${item.ImageTags.Logo}&maxWidth=${LOGO_WIDTH}&quality=90`
+		});
+
+		const preloadItem = (item) => {
+			if (!hasArt(item)) return Promise.resolve();
+			if (preloaded.has(item.Id)) return preloaded.get(item.Id);
+			const p = Promise.all(Object.values(imageUrls(item)).map(src => new Promise(resolve => {
+				const img = new Image();
+				img.onload = img.onerror = () => resolve();
+				img.src = src;
+			})));
+			preloaded.set(item.Id, p);
+			if (preloaded.size > 40) preloaded.delete(preloaded.keys().next().value);
+			return p;
+		};
+
+		// API YouTube chargée en asynchrone (elle bloquait l'affichage de toute la barre)
+		let ytApiPromise = null;
+		const loadYouTubeApi = () => {
+			if (window.YT && window.YT.Player) return Promise.resolve(window.YT);
+			if (!ytApiPromise) {
+				ytApiPromise = new Promise((resolve, reject) => {
+					const previous = window.onYouTubeIframeAPIReady;
+					window.onYouTubeIframeAPIReady = () => {
+						if (typeof previous === 'function') try { previous(); } catch (_) {}
+						resolve(window.YT);
+					};
+					const s = document.createElement('script');
+					s.src = 'https://www.youtube.com/iframe_api';
+					s.async = true;
+					s.onerror = () => { ytApiPromise = null; reject(new Error('YouTube iframe API unavailable')); };
+					document.head.appendChild(s);
+				});
+			}
+			return ytApiPromise;
+		};
 
 		// Ensure that the video player is muted initially and can be unmuted on hover
 		const initPlayer = () => {
@@ -222,9 +291,10 @@
 				previousMovies.shift();
 			}
 
+			const urls = imageUrls(movie);
 			['backdrop', 'logo'].forEach(type =>
 				slide.appendChild(
-					createElem('img', type, null, `/Items/${movie.Id}/Images/${type.charAt(0).toUpperCase() + type.slice(1)}${type === 'backdrop' ? '/0' : ''}`, type)
+					createElem('img', type, null, urls[type], type)
 				)
 			);
 			slide.appendChild(createElem('div', 'heading', title));
@@ -379,6 +449,8 @@
 				videoContainer.appendChild(videoElement);
 				slide.appendChild(videoContainer);
 
+				loadYouTubeApi().then(YT => {
+				if (!slide.isConnected) return; // la diapo a déjà changé
 				player = new YT.Player(videoElement, {
 					height: '100%',
 					width: '100%',
@@ -474,6 +546,10 @@
 							startSlideChangeTimer();
 						}
 					}
+				});
+				}).catch(err => {
+					console.error('YouTube API could not be loaded', err);
+					if (slide.isConnected) startSlideChangeTimer();
 				});
 			} else {
 				startSlideChangeTimer();
@@ -606,14 +682,15 @@
 
 		const startSlideChangeTimer = () => { clearTimeout(slideChangeTimeout); slideChangeTimeout = setTimeout(fetchRandomMovie, shuffleInterval); };
 
-		const checkBackdropAndLogo = movie => {
-			Promise.all(['/Images/Backdrop/0', '/Images/Logo'].map(url => 
-				fetch(`/Items/${movie.Id}${url}`, { method: 'HEAD' }).then(response => response.ok)
-			)).then(([backdropExists, logoExists]) => 
-				backdropExists && logoExists ? createSlideElement(movie, true) : fetchRandomMovie()
-			).catch(() => fetchRandomMovie());
+		const shuffleArray = (array) => {
+			for (let i = array.length - 1; i > 0; i--) {
+				const j = Math.floor(Math.random() * (i + 1));
+				[array[i], array[j]] = [array[j], array[i]];
+			}
+			return array;
 		};
 
+		// List.txt : toutes les lignes en 1 requête groupée (avant : 1 requête par ligne, l'une après l'autre)
 		const readCustomList = () =>
 			fetch('List.txt?' + new Date().getTime())
 				.then(response => response.ok ? response.text() : null)
@@ -632,107 +709,100 @@
 					// Check for mute
 					isMuted = muteSetting === "MuteOn";
 
-					// Initialize a temporary array for all media IDs (movies, shows, and collection contents)
+					const ids = lines.map(line => line.trim().substring(0, 32)).filter(Boolean);
+					if (!ids.length) return null;
+
+					const unique = [...new Set(ids)];
+					const chunks = [];
+					for (let i = 0; i < unique.length; i += 100) chunks.push(unique.slice(i, i + 100));
+					const fetched = (await Promise.all(chunks.map(c =>
+						apiGet(`/Items?Ids=${c.join(',')}&Fields=${ITEM_FIELDS}`).then(d => d.Items || []).catch(err => { console.error(err); return []; })
+					))).flat();
+					const byId = new Map(fetched.map(item => [item.Id, item]));
+
+					// Collections : leur contenu, 1 requête par collection, en parallèle
+					const collections = await Promise.all(ids.map(id => {
+						const item = byId.get(id);
+						if (!item || item.Type !== 'BoxSet') return Promise.resolve(null);
+						return apiGet(`/Items?ParentId=${id}&Recursive=true&ImageTypes=Logo&Fields=${ITEM_FIELDS}`)
+							.then(d => d.Items || [])
+							.catch(error => { console.error(`Error fetching collection items for ID: ${id}`, error); return []; });
+					}));
+
 					const mediaList = [];
+					ids.forEach((id, i) => {
+						if (collections[i]) mediaList.push(...collections[i]);
+						else if (byId.has(id)) mediaList.push(byId.get(id));
+					});
 
-					for (const line of lines) {
-						const mediaId = line.trim().substring(0, 32);
-						const isCollection = await checkIfCollection(mediaId);
-
-						if (isCollection) {
-							const collectionItems = await fetchCollectionItems(mediaId);
-							if (collectionItems) {
-								mediaList.push(...collectionItems);
-							}
-						} else {
-							mediaList.push(mediaId);
-						}
-					}
-
-					return shuffleArray(mediaList); // Shuffle the list before returning it
+					// Les éléments sans backdrop ou sans logo étaient sautés un par un : on les écarte d'avance
+					const withArt = mediaList.filter(hasArt);
+					return withArt.length ? shuffleArray(withArt) : null;
 				})
 				.catch(() => {
 					console.error('Error reading List.txt. Falling back to random selection.');
 					return null;
 				});
 
-		const checkIfCollection = async (itemId) => {
-			const token = JSON.parse(localStorage.getItem('jellyfin_credentials')).Servers[0].AccessToken;
-			const headers = { 'Authorization': `MediaBrowser Client="Jellyfin Web", Token="${token}"` };
-
-			try {
-				const response = await fetch(`/Items/${itemId}?Fields=Type`, { headers });
-				const data = await response.json();
-				return data.Type === "BoxSet";
-			} catch (error) {
-				console.error(`Error checking item type for ID: ${itemId}`, error);
-				return false;
+		const loadSource = () => {
+			if (!sourcePromise) {
+				sourcePromise = readCustomList().then(list => {
+					movieList = list || [];
+					currentMovieIndex = 0;
+					if (!movieList.length) console.warn("Fallback to random selection.");
+				});
 			}
-		};
-		
-		const fetchCollectionItems = async (collectionId) => {
-			const token = JSON.parse(localStorage.getItem('jellyfin_credentials')).Servers[0].AccessToken;
-			const headers = { 'Authorization': `MediaBrowser Client="Jellyfin Web", Token="${token}"` };
-
-			try {
-				const response = await fetch(`/Items?ParentId=${collectionId}&Recursive=true&Fields=Id`, { headers });
-				const data = await response.json();
-				return data.Items.map(item => item.Id);
-			} catch (error) {
-				console.error(`Error fetching collection items for ID: ${collectionId}`, error);
-				return [];
-			}
+			return sourcePromise;
 		};
 
-		const fetchRandomMovie = () => {
+		// Mode aléatoire : 20 éléments avec logo d'un coup (avant : 1 requête + 2 HEAD par essai, et nouvel essai si pas de logo)
+		const fetchRandomBatch = () => {
+			if (!randomBatchPromise) {
+				const itemTypes = moviesSeriesBoth === 1 ? 'Movie' : (moviesSeriesBoth === 2 ? 'Series' : 'Movie,Series');
+				randomBatchPromise = apiGet(`/Items?IncludeItemTypes=${itemTypes}&Recursive=true&Limit=${RANDOM_BATCH_SIZE}&SortBy=random&ImageTypes=Logo&Fields=Id,${ITEM_FIELDS}`)
+					.then(data => { randomQueue.push(...(data.Items || []).filter(hasArt)); })
+					.catch(err => console.error('Error fetching random items', err))
+					.finally(() => { randomBatchPromise = null; });
+			}
+			return randomBatchPromise;
+		};
+
+		const getNextItem = async () => {
+			await loadSource();
+			if (movieList.length > 0) {
+				if (currentMovieIndex >= movieList.length) currentMovieIndex = 0;
+				return movieList[currentMovieIndex++];
+			}
+			for (let i = 0; !randomQueue.length && i < 3; i++) await fetchRandomBatch();
+			return randomQueue.shift();
+		};
+
+		// Précharge les images de la diapo suivante pendant que l'actuelle est affichée
+		const preloadUpcoming = () => {
+			if (movieList.length > 0) {
+				preloadItem(movieList[currentMovieIndex % movieList.length]);
+				return;
+			}
+			if (randomQueue.length) preloadItem(randomQueue[0]);
+			if (randomQueue.length < 3) fetchRandomBatch().then(() => { if (randomQueue[0]) preloadItem(randomQueue[0]); });
+		};
+
+		const fetchRandomMovie = async () => {
 			if (isChangingSlide) return;
 			isChangingSlide = true;
-
-			if (movieList.length === 0) {
-				readCustomList().then(list => {
-					if (list && list.length > 0) {
-						movieList = list;
-						currentMovieIndex = 0;
-						fetchNextMovie();
-					} else {
-						console.warn("Fallback to random selection.");
-						fetchNextMovie(true);
-					}
-				});
-			} else {
-				fetchNextMovie();
-			}
-		};
-
-		const shuffleArray = (array) => {
-			for (let i = array.length - 1; i > 0; i--) {
-				const j = Math.floor(Math.random() * (i + 1));
-				[array[i], array[j]] = [array[j], array[i]];
-			}
-			return array;
-		};
-
-		const fetchNextMovie = (useRandom = false) => {
-			const token = JSON.parse(localStorage.getItem('jellyfin_credentials')).Servers[0].AccessToken;
-			const headers = {'Authorization': `MediaBrowser Client="Jellyfin Web", Token="${token}"` };
-
-			if (!useRandom && movieList.length > 0) {
-				if (currentMovieIndex >= movieList.length) currentMovieIndex = 0;
-				const movieId = movieList[currentMovieIndex];
-				currentMovieIndex++;
-
-				fetch(`/Items/${movieId}?Fields=Overview,RemoteTrailers,PremiereDate,RunTimeTicks,ChildCount,Genres`, { headers })
-					.then(response => response.json())
-					.then(checkBackdropAndLogo)
-					.catch(() => startSlideChangeTimer())
-					.finally(() => { isChangingSlide = false; });
-			} else {
-				const itemTypes = moviesSeriesBoth === 1 ? 'Movie' : (moviesSeriesBoth === 2 ? 'Series' : 'Movie,Series');
-				fetch(`/Items?IncludeItemTypes=${itemTypes}&Recursive=true&Limit=1&SortBy=random&Fields=Id,Overview,RemoteTrailers,PremiereDate,RunTimeTicks,ChildCount,Genres`, { headers })
-					.then(response => response.json())
-					.then(data => { if (data.Items[0]) checkBackdropAndLogo(data.Items[0]); })
-					.catch(() => startSlideChangeTimer())
-					.finally(() => { isChangingSlide = false; });
+			try {
+				const movie = await getNextItem();
+				if (!movie) { startSlideChangeTimer(); return; }
+				// Diapos suivantes : images déjà en cache. 1re diapo : on attend au plus MAX_IMAGE_WAIT
+				await Promise.race([preloadItem(movie), new Promise(r => setTimeout(r, MAX_IMAGE_WAIT))]);
+				if (!isHomePageActive) return;
+				createSlideElement(movie, true);
+				preloadUpcoming();
+			} catch (err) {
+				console.error('Error fetching next movie', err);
+				startSlideChangeTimer();
+			} finally {
+				isChangingSlide = false;
 			}
 		};
 
@@ -773,16 +843,13 @@
 			const isHomePage = url => url.includes('/home') || url.endsWith('/web/') || url.endsWith('/web/index.html');
 			if (isHomePage(window.top.location.href)) {
 				isHomePageActive = true;
-				readCustomList().then(list => {
-					if (list) { movieList = list; currentMovieIndex = 0; }
-					fetchRandomMovie();
-				});
+				if (useTrailers) loadYouTubeApi().catch(() => {}); // en parallèle des données
+				fetchRandomMovie();
 			}
 		});
 
 		window.addEventListener('unload', cleanup);
 		window.addEventListener('popstate', checkNavigation);
     </script>
-    <script src="https://www.youtube.com/iframe_api"></script>
 </body>
 </html>
