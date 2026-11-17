@@ -4847,10 +4847,8 @@ position: fixed;
    Ordre fixe : Auteur, Créateur, Réalisateur, Scénariste, Studio, Genres.
    Liens : genres => ...?genreId= / musicGenreId= ; studios => ...?studioId= */
 
-/* Genres : masqués comme avant (.genresGroup) */
-.itemDetailsGroup > div:has(a[href*="enreId="]) {
-  display: none;
-}
+/* Genres : affichés sur tous les modes (mobile, desktop, TV).
+   Plus de règle de masquage ici : le groupe Genres (lien ...?genreId=) reste visible. */
 
 /* Scénaristes : masqués comme avant (.writersGroup). Le groupe "personnes"
    qui en suit un autre (Réalisateur puis Scénariste) est le scénariste. */
